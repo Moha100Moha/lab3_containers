@@ -1,0 +1,85 @@
+name: Release
+
+# Run on every push to main
+on:
+  push:
+    branches: [main]
+
+# Permission to create releases and tags
+permissions:
+  contents: write
+
+jobs:
+  # ---------- Build on every operating system ----------
+  build:
+    name: build-${{ matrix.name }}        # shown as build-ubuntu, build-windows, ...
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false                    # do not cancel other builds if one fails
+      matrix:
+        include:
+          - { name: ubuntu,    os: ubuntu-latest  }
+          - { name: ubuntu-22, os: ubuntu-22.04   }
+          - { name: macos,     os: macos-latest   }
+          - { name: windows,   os: windows-latest }
+
+    steps:
+      # 1. Download the repository code
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Generate build files with CMake
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      # 3. Compile in Release mode
+      - name: Build
+        run: cmake --build build --config Release
+
+      # 4. Copy the executable to dist/ with a unique name per OS
+      - name: Package
+        shell: bash
+        run: |
+          mkdir dist
+          if [ -f build/Release/containers.exe ]; then
+            cp build/Release/containers.exe dist/containers-${{ matrix.name }}.exe
+          else
+            cp build/containers dist/containers-${{ matrix.name }}
+          fi
+
+      # 5. Run the program to check that it works
+      - name: Run
+        shell: bash
+        run: |
+          for f in dist/*; do "$f"; done
+
+      # 6. Save the result so the next job can use it
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: containers-${{ matrix.name }}
+          path: dist/*
+
+  # ---------- Publish a GitHub Release ----------
+  create-release:
+    name: create-release
+    needs: build                          # starts only after ALL builds succeed
+    runs-on: ubuntu-latest
+
+    steps:
+      # Download all executables from the build jobs into one folder
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Create the release and attach all executables
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Build ${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          files: dist/*
