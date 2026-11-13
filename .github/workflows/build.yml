@@ -1,47 +1,64 @@
-name: Build
+name: Release
 
-# Run on every commit (push) and on every pull request
-on:
-  push:
-  pull_request:
+on: push
+
+# Разрешение на создание релиза
+permissions:
+  contents: write
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false          # do not cancel other OS builds if one fails
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-
-    runs-on: ${{ matrix.os }}
-
+  # Сборка и тесты на Linux (Ubuntu)
+  build-ubuntu:
+    runs-on: ubuntu-latest
     steps:
-      # 1. Download the repository code
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # 2. Generate the build files with CMake
+      - uses: actions/checkout@v4
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Prepare binary
+        run: cp build/ip_filter ip_filter-linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ip_filter-linux
+          path: ip_filter-linux
 
-      # 3. Compile the project in Release mode
+  # Сборка и тесты на Windows
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build
       - name: Build
         run: cmake --build build --config Release
-
-      # 4. Run the program to check that it works
-      - name: Run
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Prepare binary
         shell: bash
-        run: |
-          if [ -f build/Release/containers.exe ]; then
-            build/Release/containers.exe
-          else
-            ./build/containers
-          fi
-
-      # 5. Save the built program (release) so it can be downloaded
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        run: cp build/Release/ip_filter.exe ip_filter-windows.exe
+      - uses: actions/upload-artifact@v4
         with:
-          name: containers-${{ matrix.os }}
-          path: |
-            build/containers
-            build/Release/containers.exe
+          name: ip_filter-windows
+          path: ip_filter-windows.exe
+
+  # Создание релиза: запускается только после успешных сборок на обеих ОС
+  create-release:
+    needs: [build-ubuntu, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v1.0.${{ github.run_number }}" dist/* \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Release v1.0.${{ github.run_number }}" \
+            --notes "Автоматическая сборка лабораторной работы №2 (Linux и Windows)"
