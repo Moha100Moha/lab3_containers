@@ -1,0 +1,47 @@
+name: Build
+
+# Run on every commit (push) and on every pull request
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false          # do not cancel other OS builds if one fails
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # 1. Download the repository code
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Generate the build files with CMake
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      # 3. Compile the project in Release mode
+      - name: Build
+        run: cmake --build build --config Release
+
+      # 4. Run the program to check that it works
+      - name: Run
+        shell: bash
+        run: |
+          if [ -f build/Release/containers.exe ]; then
+            build/Release/containers.exe
+          else
+            ./build/containers
+          fi
+
+      # 5. Save the built program (release) so it can be downloaded
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: containers-${{ matrix.os }}
+          path: |
+            build/containers
+            build/Release/containers.exe
