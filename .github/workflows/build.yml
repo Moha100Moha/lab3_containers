@@ -1,64 +1,131 @@
-name: Release
+name: Build
 
-on: push
+# Run on every commit (push) and on every pull request
+on:
+  push:
+  pull_request:
 
-# Разрешение на создание релиза
+jobs:
+  build:
+    strategy:
+      fail-fast: false          # do not cancel other OS builds if one fails
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # 1. Download the repository code
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Generate the build files with CMake
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      # 3. Compile the project in Release mode
+      - name: Build
+        run: cmake --build build --config Release
+
+      # 4. Run the program to check that it works
+      - name: Run
+        shell: bash
+        run: |
+          if [ -f build/Release/containers.exe ]; then
+            build/Release/containers.exe
+          else
+            ./build/containers
+          fi
+
+      # 5. Save the built program (release) so it can be downloaded
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: containers-${{ matrix.os }}
+          path: |
+            build/containers
+            build/Release/containers.exename: Release
+
+# Run on every push to main
+on:
+  push:
+    branches: [main]
+
+# Permission to create releases and tags
 permissions:
   contents: write
 
 jobs:
-  # Сборка и тесты на Linux (Ubuntu)
-  build-ubuntu:
-    runs-on: ubuntu-latest
+  # ---------- Build on every operating system ----------
+  build:
+    name: build-${{ matrix.name }}        # shown as build-ubuntu, build-windows, ...
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false                    # do not cancel other builds if one fails
+      matrix:
+        include:
+          - { name: ubuntu,    os: ubuntu-latest  }
+          - { name: ubuntu-22, os: ubuntu-22.04   }
+          - { name: macos,     os: macos-latest   }
+          - { name: windows,   os: windows-latest }
+
     steps:
-      - uses: actions/checkout@v4
+      # 1. Download the repository code
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Generate build files with CMake
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-      - name: Build
-        run: cmake --build build
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
-      - name: Prepare binary
-        run: cp build/ip_filter ip_filter-linux
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ip_filter-linux
-          path: ip_filter-linux
 
-  # Сборка и тесты на Windows
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure
-        run: cmake -S . -B build
+      # 3. Compile in Release mode
       - name: Build
         run: cmake --build build --config Release
-      - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
-      - name: Prepare binary
-        shell: bash
-        run: cp build/Release/ip_filter.exe ip_filter-windows.exe
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ip_filter-windows
-          path: ip_filter-windows.exe
 
-  # Создание релиза: запускается только после успешных сборок на обеих ОС
+      # 4. Copy the executable to dist/ with a unique name per OS
+      - name: Package
+        shell: bash
+        run: |
+          mkdir dist
+          if [ -f build/Release/containers.exe ]; then
+            cp build/Release/containers.exe dist/containers-${{ matrix.name }}.exe
+          else
+            cp build/containers dist/containers-${{ matrix.name }}
+          fi
+
+      # 5. Run the program to check that it works
+      - name: Run
+        shell: bash
+        run: |
+          for f in dist/*; do "$f"; done
+
+      # 6. Save the result so the next job can use it
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: containers-${{ matrix.name }}
+          path: dist/*
+
+  # ---------- Publish a GitHub Release ----------
   create-release:
-    needs: [build-ubuntu, build-windows]
+    name: create-release
+    needs: build                          # starts only after ALL builds succeed
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/download-artifact@v4
+      # Download all executables from the build jobs into one folder
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      # Create the release and attach all executables
       - name: Create release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "v1.0.${{ github.run_number }}" dist/* \
-            --repo "${{ github.repository }}" \
-            --target "${{ github.sha }}" \
-            --title "Release v1.0.${{ github.run_number }}" \
-            --notes "Автоматическая сборка лабораторной работы №2 (Linux и Windows)"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Build ${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          files: dist/*
